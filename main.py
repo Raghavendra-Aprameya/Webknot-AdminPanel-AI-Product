@@ -1,3 +1,5 @@
+
+
 import traceback
 from config import CONNECTION_STRING, GOOGLE_API_KEY, LLM_MODEL, DB_TYPE
 from db_extract import DatabaseSchemaExtractor
@@ -31,29 +33,31 @@ def main():
         query_executor = DatabaseQueryExecutor(CONNECTION_STRING)
 
         for idx, query_info in enumerate(finance_queries):
-            use_case = query_info["use_case"]
-            query = query_info["query"]
-            user_input_columns = query_info["user_input_columns"]
+            if not isinstance(query_info, dict):
+                print(f"❌ Skipping invalid query data: {query_info}")
+                continue
+
+            use_case = query_info.get("use_case", "Unknown Use Case")
+            query = query_info.get("query", "")
+            user_input_columns = query_info.get("user_input_columns", [])
 
             print(f"\n💡 **Use Case:** {use_case}")
             print(f"📌 **SQL Query:**\n{query}")
             print(f"📝 **User Input Columns:** {', '.join(user_input_columns) if user_input_columns else 'None'}")
 
-            # If user input is required, ask for values
+            user_inputs = {}
             if user_input_columns:
-                user_inputs = {}
                 for col in user_input_columns:
                     user_inputs[col] = input(f"🔹 Enter value for `{col}`: ")
 
-                print("\n⚡ Executing query...")
-                query_results = query_executor.execute_queries([query_info], user_inputs)
+            print("\n⚡ Executing query...")
+            query_results = query_executor.execute_queries([query_info], user_inputs)
 
-                # Display query execution results
-                for result in query_results:
-                    if "error" in result:
-                        print(f"❌ **Error:** {result['error']}")
-                    else:
-                        print(f"✅ **Query Result:** {result['results']}")
+            for result in query_results:
+                if "error" in result:
+                    print(f"❌ **Error:** {result['error']}")
+                else:
+                    print(f"✅ **Query Result:** {result['results']}")
 
     except Exception as e:
         print(f"\n🚨 An error occurred: {e}")
