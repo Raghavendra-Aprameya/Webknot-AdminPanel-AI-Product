@@ -5,64 +5,70 @@ import re
 
 class DatabaseQueryExecutor:
     def __init__(self, connection_string: str):
-        """
-        Initialize database connection for query execution
-        
-        :param connection_string: SQLAlchemy database connection string
-        """
+        """Initialize database connection for query execution."""
         self.engine = create_engine(connection_string)
         self.Session = sessionmaker(bind=self.engine)
 
-    def extract_affected_columns(self, query: str) -> List[str]:
+    def extract_user_input_columns(self, query: str) -> List[str]:
         """
-        Extract column names from SQL query where user input might be required.
+        Extract columns that require user input from an SQL query.
 
         :param query: SQL query string
-        :return: List of column names affected by the query, prefixed with table names
+        :return: List of columns requiring user input.
         """
-        column_patterns = [
-            r"WHERE\s+([\w\.\s,=><'\"%()-]+)",  
-            r"SET\s+([\w\.\s,=><'\"%()-]+)",    
-            r"INSERT\s+INTO\s+\w+\s*\((.*?)\)",  
-            r"VALUES\s*\((.*?)\)"               
+        user_input_patterns = [
+            r"WHERE\s+([\w\.\s,=><'\"%()-]+)",  # Capture conditions in WHERE
+            r"SET\s+([\w\.\s,=><'\"%()-]+)",    # Capture columns in UPDATE SET
+            r"VALUES\s*\((.*?)\)"               # Capture values in INSERT queries
         ]
 
-        affected_columns = set()
-        for pattern in column_patterns:
+        user_input_columns = set()
+
+        for pattern in user_input_patterns:
             matches = re.findall(pattern, query, re.IGNORECASE)
             for match in matches:
-                columns = re.split(r",\s*", match)  
-                affected_columns.update(col.split("=")[0].strip() for col in columns)
+                if isinstance(match, tuple):  
+                    match = match[0]
+                columns = re.split(r",\s*", match)
+                for col in columns:
+                    col = col.split("=")[0].strip()
+                    if "." in col:
+                        user_input_columns.add(col)
+                    else:
+                        user_input_columns.add(f"unknown_table.{col}")
 
-        # Ensure table name prefixing
-        affected_columns_prefixed = [col if "." in col else f"unknown_table.{col}" for col in affected_columns]
+        return list(user_input_columns)
 
-        return list(affected_columns_prefixed)
-
-    def execute_queries(self, queries: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    def execute_queries(self, queries: List[Dict[str, str]], user_inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Execute a list of SQL queries and return results along with affected columns.
+        Execute SQL queries dynamically with user input values.
 
-        :param queries: List of query dictionaries containing SQL and metadata
-        :return: List of query execution results, including extracted column names
+        :param queries: List of SQL query dictionaries with placeholders.
+        :param user_inputs: Dictionary containing user-entered values for query parameters.
+        :return: Query execution results with only user input columns.
         """
         results = []
         with self.Session() as session:
             for query_info in queries:
-                query = query_info['query']
-                print(f"Executing Query:\n{query}")
+                query = query_info["query"]
+                user_input_columns = self.extract_user_input_columns(query)
 
-                affected_columns = self.extract_affected_columns(query)
-
+                # Secure Parameterized Query Execution
                 try:
-                    result = session.execute(text(query))
+                    query_params = {}
+                    for col in user_input_columns:
+                        col_name = col.split(".")[-1]  # Extract column name without table prefix
+                        if col_name in user_inputs:
+                            query_params[col_name] = user_inputs[col_name]
+
+                    result = session.execute(text(query), query_params)
                     query_results = [dict(row) for row in result.mappings()]
 
                     results.append({
                         "use_case": query_info["use_case"],
                         "query": query,
                         "results": query_results,
-                        "affected_columns": affected_columns  
+                        "user_input_columns": user_input_columns  
                     })
 
                 except Exception as e:
@@ -70,7 +76,7 @@ class DatabaseQueryExecutor:
                         "use_case": query_info["use_case"],
                         "query": query,
                         "error": str(e),
-                        "affected_columns": affected_columns  
+                        "user_input_columns": user_input_columns  
                     })
 
         return results
