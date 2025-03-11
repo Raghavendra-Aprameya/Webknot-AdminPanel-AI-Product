@@ -1,6 +1,3 @@
-
-
-
 from typing import List, Dict, Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -26,47 +23,33 @@ class DatabaseQueryExecutor:
                 query = query_info["query"]
 
                 try:
-                    if query.strip().lower().startswith("delete"):
-                        # Special handling for deleting employees (manager dependency)
-                        employee_id = user_inputs.get("employee_id")
+                    # ✅ Handle SELECT queries and fetch results
+                    if query.strip().lower().startswith("select"):
+                        result = session.execute(text(query), user_inputs)
+                        query_results = [dict(row) for row in result.mappings()]  # Convert to list of dictionaries
 
-                        if employee_id:
-                            # Check for dependent employees
-                            check_query = text("SELECT COUNT(*) FROM employees WHERE manager_id = :employee_id;")
-                            dependent_count = session.execute(check_query, {"employee_id": employee_id}).scalar()
+                        results.append({
+                            "use_case": query_info["use_case"],
+                            "query": query,
+                            "results": query_results if query_results else "No records found.",
+                            "user_input_columns": query_info.get("user_input_columns", [])
+                        })
 
-                            if dependent_count > 0:
-                                # Update dependent employees to remove manager reference before deletion
-                                update_query = text("UPDATE employees SET manager_id = NULL WHERE manager_id = :employee_id;")
-                                session.execute(update_query, {"employee_id": employee_id})
-                                session.commit()
-
-                            # Proceed with employee deletion
-                            delete_query = text(query)
-                            session.execute(delete_query, user_inputs)
-                            session.commit()
-
-                            results.append({
-                                "use_case": query_info["use_case"],
-                                "query": query,
-                                "results": f"Employee ID {employee_id} deleted successfully after resolving dependencies.",
-                                "user_input_columns": query_info.get("user_input_columns", [])
-                            })
-                        else:
-                            session.execute(text(query), user_inputs)
-                            session.commit()
-                            results.append({
-                                "use_case": query_info["use_case"],
-                                "query": query,
-                                "results": "Record deleted successfully.",
-                                "user_input_columns": query_info.get("user_input_columns", [])
-                            })
+                    elif query.strip().lower().startswith("delete"):
+                        # ✅ Handle DELETE queries
+                        session.execute(text(query), user_inputs)
+                        session.commit()
+                        results.append({
+                            "use_case": query_info["use_case"],
+                            "query": query,
+                            "results": "Record deleted successfully.",
+                            "user_input_columns": query_info.get("user_input_columns", [])
+                        })
 
                     else:
-                        # For INSERT and UPDATE queries, commit after execution
-                        result = session.execute(text(query), user_inputs)
+                        # ✅ Handle INSERT and UPDATE queries
+                        session.execute(text(query), user_inputs)
                         session.commit()
-
                         results.append({
                             "use_case": query_info["use_case"],
                             "query": query,

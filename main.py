@@ -5,7 +5,6 @@ from config import CONNECTION_STRING, GOOGLE_API_KEY, LLM_MODEL, DB_TYPE
 from db_extract import DatabaseSchemaExtractor
 from query_exec import DatabaseQueryExecutor
 from query_generator import FinanceQueryGenerator
-
 def main():
     try:
         print("🔍 Extracting database schema...")
@@ -57,7 +56,18 @@ def main():
                 if "error" in result:
                     print(f"❌ **Error:** {result['error']}")
                 else:
-                    print(f"✅ **Query Result:** {result['results']}")
+                    print(f"✅ **Query Executed Successfully!**")
+
+                    # ✅ Display actual query results for SELECT statements
+                    if isinstance(result["results"], list):
+                        if result["results"]:
+                            print("📌 **Query Results:**")
+                            for row in result["results"]:
+                                print(row)  # Print each row as a dictionary
+                        else:
+                            print("ℹ️ No records found.")
+                    else:
+                        print(f"ℹ️ {result['results']}")  # Print messages for non-SELECT queries
 
     except Exception as e:
         print(f"\n🚨 An error occurred: {e}")
