@@ -15,7 +15,7 @@ class SQLUseCaseResponse(BaseModel):
     use_cases: List[SQLUseCase]
 
 class FinanceQueryGenerator:
-    def __init__(self, schema: Dict[str, List[str]], api_key: str, db_url: str, db_type: str, model: str = "gemini-1.5-pro"):
+    def __init__(self, schema: str, api_key: str, db_url: str, db_type: str, model: str = "gemini-1.5-pro"):
         self.schema = schema
         self.db_url = db_url
         self.db_type = db_type.lower()
@@ -44,7 +44,8 @@ class FinanceQueryGenerator:
                 - Identify columns needing user input (WHERE, SET, VALUES).
                 - Provide 10+ insightful queries.
                 - Ensure queries are valid for {self.db_type}.
-                
+                - Use **parameterized query placeholders** like `:parameter_name` instead of `<parameter_name>`.
+
                 {sql_syntax_instruction}
                 {format_instructions}
             """),
@@ -59,7 +60,7 @@ class FinanceQueryGenerator:
             return [
                 {
                     "use_case": item.use_case,
-                    "query": item.query,
+                    "query": item.query.replace("<", ":").replace(">", ""),  # Fix placeholders
                     "affected_columns": item.affected_columns,
                     "user_input_columns": item.user_input_columns
                 }
