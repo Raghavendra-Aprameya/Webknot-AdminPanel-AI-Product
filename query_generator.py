@@ -1,3 +1,4 @@
+
 from typing import List, Dict, Any
 import google.generativeai as genai
 from langchain_core.prompts import ChatPromptTemplate
@@ -33,7 +34,7 @@ class FinanceQueryGenerator:
         self.draft_prompt = ChatPromptTemplate.from_messages([
             ("system", f"""
                 You are an expert SQL query generator.
-                Given a database schema, generate business use cases and SQL queries.
+                Given a database schema, generate  different business use cases and SQL queries.
 
                 Schema:
                 {schema}

@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import IntegrityError
 
 class DatabaseQueryExecutor:
     def __init__(self, connection_string: str):
@@ -20,23 +21,52 @@ class DatabaseQueryExecutor:
         with self.Session() as session:
             for query_info in queries:
                 query = query_info["query"]
-                
-                # Convert <placeholder> format to :placeholder for SQLAlchemy
-                for key in user_inputs:
-                    query = query.replace(f"<{key}>", f":{key}")
 
                 try:
-                    result = session.execute(text(query), user_inputs)
-                    query_results = [dict(row) for row in result.mappings()]
+                    # ✅ Handle SELECT queries and fetch results
+                    if query.strip().lower().startswith("select"):
+                        result = session.execute(text(query), user_inputs)
+                        query_results = [dict(row) for row in result.mappings()]  # Convert to list of dictionaries
 
+                        results.append({
+                            "use_case": query_info["use_case"],
+                            "query": query,
+                            "results": query_results if query_results else "No records found.",
+                            "user_input_columns": query_info.get("user_input_columns", [])
+                        })
+
+                    elif query.strip().lower().startswith("delete"):
+                        # ✅ Handle DELETE queries
+                        session.execute(text(query), user_inputs)
+                        session.commit()
+                        results.append({
+                            "use_case": query_info["use_case"],
+                            "query": query,
+                            "results": "Record deleted successfully.",
+                            "user_input_columns": query_info.get("user_input_columns", [])
+                        })
+
+                    else:
+                        # ✅ Handle INSERT and UPDATE queries
+                        session.execute(text(query), user_inputs)
+                        session.commit()
+                        results.append({
+                            "use_case": query_info["use_case"],
+                            "query": query,
+                            "results": "Query executed successfully.",
+                            "user_input_columns": query_info.get("user_input_columns", [])
+                        })
+
+                except IntegrityError:
+                    session.rollback()
                     results.append({
                         "use_case": query_info["use_case"],
                         "query": query,
-                        "results": query_results,
+                        "error": "Foreign key constraint error: Cannot delete or update this record as it is referenced elsewhere.",
                         "user_input_columns": query_info.get("user_input_columns", [])
                     })
-
                 except Exception as e:
+                    session.rollback()
                     results.append({
                         "use_case": query_info["use_case"],
                         "query": query,
