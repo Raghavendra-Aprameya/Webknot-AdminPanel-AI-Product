@@ -4,11 +4,6 @@ from sqlalchemy import inspect
 
 class DatabaseSchemaExtractor:
     def __init__(self, connection_string: str):
-        """
-        Initialize database connection and create engine
-        
-        :param connection_string: SQLAlchemy database connection string
-        """
         try:
             self.engine = create_engine(
                 connection_string, 
@@ -27,11 +22,6 @@ class DatabaseSchemaExtractor:
             raise
     
     def get_schema(self) -> str:
-        """
-        Extract detailed database schema information
-        
-        :return: Formatted schema description
-        """
         try:
             inspector = inspect(self.engine)
             schema_info = []
@@ -53,7 +43,6 @@ class DatabaseSchemaExtractor:
                         f"{col_name} ({col_type}) {nullable_str}"
                     )
                 
-                # Get foreign keys
                 try:
                     foreign_keys = inspector.get_foreign_keys(table_name)
                     fk_details = []

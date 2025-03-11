@@ -2,111 +2,94 @@ from typing import List, Dict, Any
 import google.generativeai as genai
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from langchain_core.output_parsers import PydanticOutputParser
+import re
 
-class SQLQueryItem(BaseModel):
-    question: str = Field(..., description="Business question this query answers")
-    query: str = Field(..., description="SQL query that answers the business question")
-    relevance: float = Field(..., ge=0.0, le=1.0, description="Relevance score from 0.0 to 1.0")
-    is_time_based: bool = Field(..., description="Whether this query analyzes time-based trends")
-    
-    @validator('relevance')
-    def relevance_must_be_between_0_and_1(cls, v):
-        if not 0 <= v <= 1:
-            raise ValueError('Relevance must be between 0.0 and 1.0')
-        return round(v, 2)
+class SQLUseCase(BaseModel):
+    use_case: str = Field(..., description="Business use case this query addresses")
+    query: str = Field(..., description="SQL query that implements the use case")
+    affected_columns: List[str] = Field(..., description="List of columns involved in the query, prefixed with table names")
 
-class SQLQueryResponse(BaseModel):
-    queries: List[SQLQueryItem] = Field(..., description="List of generated SQL queries")
+class SQLUseCaseResponse(BaseModel):
+    use_cases: List[SQLUseCase] = Field(..., description="Generated SQL queries with relevant use cases")
+
 class FinanceQueryGenerator: 
-    def __init__(self, schema: str, api_key: str, model: str = "gemini-1.5-pro"):
+    def __init__(self, schema: str, api_key: str, db_url: str, db_type: str, model: str = "gemini-1.5-pro"):
         """
-        Initialize AI-powered query generator
+        Initialize AI-powered query generator.
         
         :param schema: Database schema description
         :param api_key: Google API key
+        :param db_url: Database connection URL
+        :param db_type: Type of database (MySQL, PostgreSQL, etc.)
         :param model: LLM model to use
         """
         self.schema = schema
-        
-        
+        self.db_url = db_url
+        self.db_type = db_type.lower()
         self.llm = ChatGoogleGenerativeAI(
             model=model, 
             google_api_key=api_key
         )
-        self.parser = PydanticOutputParser(pydantic_object=SQLQueryResponse)
-        
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an expert SQL query generator who creates insightful analytics queries tailored to specific business needs.
+        self.parser = PydanticOutputParser(pydantic_object=SQLUseCaseResponse)
 
-              Given a database schema, user role, and business domain, generate 10 high-value SQL queries that would provide meaningful insights.
+        sql_syntax_instruction = {
+            "mysql": "Use MySQL syntax only.",
+            "postgres": "Use PostgreSQL syntax only.",
+            "sqlite": "Use SQLite syntax only."
+        }.get(self.db_type, "Use standard SQL syntax.")
 
-              Database Schema:
-              {schema}
+        # ✅ FIX: Escape `{{ }}` to avoid missing variables error
+        format_instructions = self.parser.get_format_instructions()
+        format_instructions_escaped = format_instructions.replace("{", "{{").replace("}", "}}")
 
-              User Role: {role}
-              Business Domain: {domain}
+        self.draft_prompt = ChatPromptTemplate.from_messages([
+            ("system", f"""You are an expert SQL query generator.
 
-              Instructions:
-              - Carefully analyze the schema to identify relevant tables and relationships for the given domain
-              - Generate exactly 10 insightful queries:
-                * 5 should analyze time-based trends (monthly, quarterly, year-over-year)
-                * 5 should provide non-time-based insights (distributions, ratios, aggregations)
-              - Each query should directly support decision-making for a {role} in the {domain} context
-              - Use appropriate SQL techniques based on the schema structure
-              - Assign a relevance score (0.0-1.0) indicating how valuable each query is for the role
+                Given a database schema, generate all possible business use cases along with corresponding SQL queries.
 
-              {format_instructions}"""),
-                          ("human", "Generate SQL queries for the {role} role in the {domain} domain using the database schema provided.")
+                Schema:
+                {schema}
+
+                Instructions:
+                - Identify possible use cases based on table structures and relationships.
+                - Generate queries that match common business operations (retrieval, insertion, updating, deletion, analytics).
+                - For each query, list the column names that are affected, prefixed with table names.
+                - Provide 10+ insightful queries across different categories.
+                - Ensure queries are valid for {self.db_type}.
+                
+                {sql_syntax_instruction}
+                {format_instructions_escaped}  # ✅ Fix: Use escaped instructions
+            """),
+            ("human", "Generate SQL queries covering all relevant business use cases.")
         ])
-        self.prompt = self.prompt.partial(format_instructions=self.parser.get_format_instructions())
-
-        self.chain = self.prompt | self.llm | self.parser
-
-    def clean_sql(self, sql_query: str) -> str:
-        """
-        Remove markdown formatting (backticks) from SQL queries.
-        """
-        return sql_query.replace("```sql", "").replace("```", "").strip()
-    def generate_queries(self, role: str="Finance Manager", domain: str = "finance") -> SQLQueryResponse:
-        """
-        Generate SQL queries tailored to a specific role and domain
         
-        :param role: User role (e.g., "Finance Manager", "CFO", "Financial Analyst")
-        :param domain: Business domain (e.g., "finance", "retail", "healthcare")
-        :return: Structured response with generated SQL queries
+    def generate_use_cases(self) -> List[Dict[str, Any]]:
+        """
+        Generate SQL queries covering all relevant use cases based on schema.
+        
+        :return: List of dictionaries with use cases, queries, and affected columns
         """
         try:
-            result = self.chain.invoke({
-                "schema": self.schema,
-                "role": role,
-                "domain": domain
+            draft_chain = self.draft_prompt | self.llm | self.parser
+            draft_result = draft_chain.invoke({
+                "schema": self.schema
             })
-            
-            return result
+
+            return [
+                {
+                    "use_case": item.use_case,
+                    "query": item.query,
+                    "affected_columns": item.affected_columns
+                }
+                for item in draft_result.use_cases
+            ]
         
         except Exception as e:
-            print(f"Error generating queries: {e}")
-            return SQLQueryResponse(queries=[
-                SQLQueryItem(
-                    question="Error generating queries",
-                    query=f"-- Error: {str(e)}",
-                    relevance=0.0,
-                    is_time_based=False
-                )
-            ])
-    
-    def get_queries_for_executor(self, role: str="Finance Manager", domain: str="finance") -> List[Dict[str, str]]:
-
-      response = self.generate_queries(role=role, domain=domain)
-
-      return [
-          {
-              "query": item.query,
-              "explanation": item.question,
-              "relevance": item.relevance,
-              "is_time_based": item.is_time_based
-          }
-          for item in response.queries
-      ]
+            print(f"Error generating use cases: {e}")
+            return [{
+                "use_case": "Error generating queries",
+                "query": f"-- Error: {str(e)}",
+                "affected_columns": []
+            }]
