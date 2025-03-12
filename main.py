@@ -1,10 +1,10 @@
 
-
 import traceback
 from config import CONNECTION_STRING, GOOGLE_API_KEY, LLM_MODEL, DB_TYPE
 from db_extract import DatabaseSchemaExtractor
 from query_exec import DatabaseQueryExecutor
 from query_generator import FinanceQueryGenerator
+
 def main():
     try:
         print("🔍 Extracting database schema...")
@@ -47,7 +47,12 @@ def main():
             user_inputs = {}
             if user_input_columns:
                 for col in user_input_columns:
-                    user_inputs[col] = input(f"🔹 Enter value for `{col}`: ")
+                    value = input(f"🔹 Enter value for `{col}`: ")
+                    # Avoid empty values causing problems
+                    if value.strip() == "":
+                        print(f"⚠️ Warning: Empty value provided for {col}, using NULL instead.")
+                        value = None
+                    user_inputs[col] = value
 
             print("\n⚡ Executing query...")
             query_results = query_executor.execute_queries([query_info], user_inputs)
