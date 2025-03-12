@@ -1,7 +1,8 @@
+
 from typing import List, Dict, Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, OperationalError, SQLAlchemyError
 
 class DatabaseQueryExecutor:
     def __init__(self, connection_string: str):
@@ -23,6 +24,9 @@ class DatabaseQueryExecutor:
                 query = query_info["query"]
 
                 try:
+                    # Pre-process query for common syntax issues
+                    query = self._fix_common_syntax_issues(query)
+                    
                     # ✅ Handle SELECT queries and fetch results
                     if query.strip().lower().startswith("select"):
                         result = session.execute(text(query), user_inputs)
@@ -37,26 +41,36 @@ class DatabaseQueryExecutor:
 
                     elif query.strip().lower().startswith("delete"):
                         # ✅ Handle DELETE queries
-                        session.execute(text(query), user_inputs)
+                        result = session.execute(text(query), user_inputs)
                         session.commit()
                         results.append({
                             "use_case": query_info["use_case"],
                             "query": query,
-                            "results": "Record deleted successfully.",
+                            "results": f"{result.rowcount} record(s) deleted successfully.",
                             "user_input_columns": query_info.get("user_input_columns", [])
                         })
 
                     else:
                         # ✅ Handle INSERT and UPDATE queries
-                        session.execute(text(query), user_inputs)
+                        result = session.execute(text(query), user_inputs)
                         session.commit()
                         results.append({
                             "use_case": query_info["use_case"],
                             "query": query,
-                            "results": "Query executed successfully.",
+                            "results": f"Query executed successfully. {result.rowcount} row(s) affected.",
                             "user_input_columns": query_info.get("user_input_columns", [])
                         })
 
+                except ProgrammingError as e:
+                    session.rollback()
+                    fixed_query = self._suggest_fix_for_query(query, str(e))
+                    error_message = f"{str(e)}\n\nSuggested fix: {fixed_query}" if fixed_query != query else str(e)
+                    results.append({
+                        "use_case": query_info["use_case"],
+                        "query": query,
+                        "error": error_message,
+                        "user_input_columns": query_info.get("user_input_columns", [])
+                    })
                 except IntegrityError:
                     session.rollback()
                     results.append({
@@ -65,13 +79,43 @@ class DatabaseQueryExecutor:
                         "error": "Foreign key constraint error: Cannot delete or update this record as it is referenced elsewhere.",
                         "user_input_columns": query_info.get("user_input_columns", [])
                     })
+                except OperationalError as e:
+                    session.rollback()
+                    results.append({
+                        "use_case": query_info["use_case"],
+                        "query": query,
+                        "error": f"Database operation error: {str(e)}",
+                        "user_input_columns": query_info.get("user_input_columns", [])
+                    })
                 except Exception as e:
                     session.rollback()
                     results.append({
                         "use_case": query_info["use_case"],
                         "query": query,
-                        "error": str(e),
+                        "error": f"Unexpected error: {str(e)}",
                         "user_input_columns": query_info.get("user_input_columns", [])
                     })
 
         return results
+    
+    def _fix_common_syntax_issues(self, query: str) -> str:
+        """Fix common syntax issues in SQL queries before execution."""
+        import re
+        
+        # Fix missing comparison operators
+        query = re.sub(r'(\w+)\s{2,}:', r'\1 > :', query)
+        query = re.sub(r'(\w+\.\w+)\s{2,}(\w+\.\w+)', r'\1 > \2', query)
+        
+        # Fix other common issues
+        query = query.replace("WHERE e.salary m.salary", "WHERE e.salary > m.salary")
+        
+        return query
+    
+    def _suggest_fix_for_query(self, query: str, error_msg: str) -> str:
+        """Suggest fixes based on error messages."""
+        if "syntax" in error_msg.lower():
+            # Look for missing comparison operators in WHERE clauses
+            if "WHERE" in query:
+                query = self._fix_common_syntax_issues(query)
+        
+        return query

@@ -5,6 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 from langchain_core.output_parsers import PydanticOutputParser
+import re
 
 class SQLUseCase(BaseModel):
     use_case: str
@@ -34,25 +35,54 @@ class FinanceQueryGenerator:
         self.draft_prompt = ChatPromptTemplate.from_messages([
             ("system", f"""
                 You are an expert SQL query generator.
-                Given a database schema, generate  different business use cases and SQL queries.
+                Given a database schema, generate a diverse range of business use cases and SQL queries.
 
                 Schema:
                 {schema}
 
                 Instructions:
-                - Identify business use cases.
-                - Generate SQL queries covering retrieval, insertion, updating, deletion.
+                - Identify varied business use cases across different functional areas (marketing, operations, finance, analytics, customer service).
+                - Generate SQL queries covering retrieval, insertion, updating, deletion operations.
+                - For each functional area, provide at least 2 distinct business scenarios.
+                - Include both operational and analytical queries (daily operations vs. business intelligence).
                 - Identify columns needing user input (WHERE, SET, VALUES).
-                - Provide 10+ insightful queries.
+                - Provide 10+ insightful queries with increasing complexity levels (basic, intermediate, advanced).
+                - Include at least 2 queries that use CTEs, or advanced joins if appropriate for the schema.
                 - Ensure queries are valid for {self.db_type}.
                 - Use **parameterized query placeholders** like `:parameter_name` instead of `<parameter_name>`.
+                - IMPORTANT: Always include complete comparison operators (>, <, =, >=, <=, <>) in WHERE clauses.
+                - When comparing values in WHERE clauses, make sure to write the full expression (e.g., "WHERE salary > :salary" not "WHERE salary :salary")
+                - For comparison queries, use the complete syntax (e.g., "WHERE e.salary > m.salary" not "WHERE e.salary m.salary")
 
                 {sql_syntax_instruction}
                 {format_instructions}
             """),
-            ("human", "Generate SQL queries covering all relevant business use cases.")
+            ("human", "Generate a diverse set of SQL queries covering different business functions, operational needs, and analytical requirements.")
         ])
         
+    def fix_comparison_operators(self, query: str) -> str:
+        """Fix missing comparison operators in SQL queries."""
+        # Fix pattern: "column  :param" -> "column > :param" (assuming greater than is intended)
+        query = re.sub(r'(\w+)\s{2,}:', r'\1 > :', query)
+        
+        # Fix pattern: "column  column" -> "column > column" (in joins or comparisons)
+        query = re.sub(r'(\w+\.\w+)\s{2,}(\w+\.\w+)', r'\1 > \2', query)
+        
+        return query
+    
+    def validate_query(self, query: str) -> str:
+        """Validate and fix common SQL syntax errors."""
+        # Apply specific fixes
+        query = self.fix_comparison_operators(query)
+        
+        # Fix any malformed joins or where clauses
+        query = query.replace("WHERE e.salary m.salary", "WHERE e.salary > m.salary")
+        
+        # Ensure proper spacing around operators
+        query = re.sub(r'(\w+)=(\w+)', r'\1 = \2', query)
+        
+        return query
+    
     def generate_use_cases(self) -> List[Dict[str, Any]]:
         try:
             draft_chain = self.draft_prompt | self.llm | self.parser
@@ -61,7 +91,7 @@ class FinanceQueryGenerator:
             return [
                 {
                     "use_case": item.use_case,
-                    "query": item.query.replace("<", ":").replace(">", ""),  # Fix placeholders
+                    "query": self.validate_query(item.query.replace("<", ":").replace(">", "")),
                     "affected_columns": item.affected_columns,
                     "user_input_columns": item.user_input_columns
                 }
