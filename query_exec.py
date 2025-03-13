@@ -1,77 +1,32 @@
-from typing import List, Dict, Any
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import IntegrityError
+from typing import Dict, Any, List
 
 class DatabaseQueryExecutor:
     def __init__(self, connection_string: str):
-        """Initialize database connection for query execution."""
+        """Initialize the database connection for executing queries."""
         self.engine = create_engine(connection_string)
         self.Session = sessionmaker(bind=self.engine)
 
-    def execute_queries(self, queries: List[Dict[str, str]], user_inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def execute_query(self, query: str, user_inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute SQL queries dynamically with user input values.
+        Executes a dynamically generated SQL query.
 
-        :param queries: List of SQL query dictionaries with placeholders.
-        :param user_inputs: Dictionary containing user-entered values for query parameters.
+        :param query: The generated SQL query.
+        :param user_inputs: Dictionary of user-provided parameters.
         :return: Query execution results.
         """
-        results = []
         with self.Session() as session:
-            for query_info in queries:
-                query = query_info["query"]
+            try:
+                if query.strip().lower().startswith("select"):
+                    result = session.execute(text(query), user_inputs)
+                    return {"results": [dict(row) for row in result.mappings()] or "No records found."}
 
-                try:
-                    # ✅ Handle SELECT queries and fetch results
-                    if query.strip().lower().startswith("select"):
-                        result = session.execute(text(query), user_inputs)
-                        query_results = [dict(row) for row in result.mappings()]  # Convert to list of dictionaries
+                session.execute(text(query), user_inputs)
+                session.commit()
+                return {"results": "Query executed successfully."}
 
-                        results.append({
-                            "use_case": query_info["use_case"],
-                            "query": query,
-                            "results": query_results if query_results else "No records found.",
-                            "user_input_columns": query_info.get("user_input_columns", [])
-                        })
-
-                    elif query.strip().lower().startswith("delete"):
-                        # ✅ Handle DELETE queries
-                        session.execute(text(query), user_inputs)
-                        session.commit()
-                        results.append({
-                            "use_case": query_info["use_case"],
-                            "query": query,
-                            "results": "Record deleted successfully.",
-                            "user_input_columns": query_info.get("user_input_columns", [])
-                        })
-
-                    else:
-                        # ✅ Handle INSERT and UPDATE queries
-                        session.execute(text(query), user_inputs)
-                        session.commit()
-                        results.append({
-                            "use_case": query_info["use_case"],
-                            "query": query,
-                            "results": "Query executed successfully.",
-                            "user_input_columns": query_info.get("user_input_columns", [])
-                        })
-
-                except IntegrityError:
-                    session.rollback()
-                    results.append({
-                        "use_case": query_info["use_case"],
-                        "query": query,
-                        "error": "Foreign key constraint error: Cannot delete or update this record as it is referenced elsewhere.",
-                        "user_input_columns": query_info.get("user_input_columns", [])
-                    })
-                except Exception as e:
-                    session.rollback()
-                    results.append({
-                        "use_case": query_info["use_case"],
-                        "query": query,
-                        "error": str(e),
-                        "user_input_columns": query_info.get("user_input_columns", [])
-                    })
-
-        return results
+            except Exception as e:
+                session.rollback()
+                return {"error": str(e)}
