@@ -1,4 +1,3 @@
-
 from typing import List, Dict, Any
 import google.generativeai as genai
 from langchain_core.prompts import ChatPromptTemplate
@@ -29,29 +28,32 @@ class FinanceQueryGenerator:
             "sqlite": "Use SQLite syntax only."
         }.get(self.db_type, "Use standard SQL syntax.")
 
-        format_use_case_instructions = self.use_case_parser.get_format_instructions().replace("{", "{{").replace("}", "}}")
+        format_use_case_instructions = self.use_case_parser.get_format_instructions().replace("{", "{{").replace("}", "}}").replace("[", "").replace("]", "")
         format_query_instructions = self.query_parser.get_format_instructions().replace("{", "{{").replace("}", "}}")
 
         self.draft_prompt = ChatPromptTemplate.from_messages([
             ("system", f"""
-                You are an expert SQL query generator.
-                Given a database schema, generate different business use cases and SQL queries.
+            You are an expert SQL query generator.
+            Given a database schema, generate **EXACTLY** 20 use cases:  
+            - **5 for Creating data (INSERT queries)**  
+            - **5 for Reading data (SELECT queries)**  
+            - **5 for Updating data (UPDATE queries)**  
+            - **5 for Deleting data (DELETE queries)**  
 
-                Schema:
-                {schema}
+            **Schema:**
+            {schema}
 
-                Instructions:
-                - Identify business use cases.
-                - Generate SQL queries covering retrieval, insertion, updating, deletion.
-                - Identify columns needing user input (WHERE, SET, VALUES).
-                - Provide 10+ insightful queries.
-                - Ensure queries are valid for {self.db_type}.
-                - Use **parameterized query placeholders** like `:parameter_name`.
+            **Instructions:**
+            - Clearly categorize use cases as "Create", "Read", "Update", or "Delete".
+            - Generate meaningful queries covering different business cases.
+            - Identify which columns require user input.
+            - Ensure queries follow {self.db_type} syntax.
+            - Use **parameterized placeholders** (`:param_name`) instead of raw values.
 
-                {sql_syntax_instruction}
-                {format_use_case_instructions}
+            **Output Format:**
+            {format_use_case_instructions}
             """),
-            ("human", "Generate SQL queries covering all relevant business use cases.")
+            ("human", "Generate SQL queries categorized into Create, Read, Update, and Delete.")
         ])
 
         self.use_case_prompt = ChatPromptTemplate.from_messages([
@@ -62,14 +64,14 @@ class FinanceQueryGenerator:
                 Schema:
                 {schema}
 
-                Instructions:
+                **Instructions:**
                 - Understand the given use case.
                 - Generate the SQL query for it.
                 - Identify input values required from the user.
                 - Use parameterized query placeholders (`:param_name`).
                 - Ensure queries are valid for {self.db_type}.
                 - Output must follow this format:
-                
+
                 {format_query_instructions}
 
                 {sql_syntax_instruction}
@@ -77,28 +79,35 @@ class FinanceQueryGenerator:
             ("human", "Generate an SQL query for the given use case: {use_case}")
         ])
 
-    def generate_use_cases(self) -> List[Dict[str, Any]]:
+    def generate_use_cases(self) -> Dict[str, List[str]]:
+        """Generates and categorizes use cases into Create, Read, Update, and Delete."""
         try:
             draft_chain = self.draft_prompt | self.llm | self.use_case_parser
             draft_result = draft_chain.invoke({"schema": self.schema})
 
-            return [
-                {
-                    "use_case": item.use_case,
-                    "query": item.query.replace("<", ":").replace(">", ""),
-                    "affected_columns": item.affected_columns,
-                    "user_input_columns": item.user_input_columns
-                }
-                for item in draft_result.use_cases
-            ]
-        
+            categorized_use_cases = {
+                "Create": [],
+                "Read": [],
+                "Update": [],
+                "Delete": []
+            }
+
+            for item in draft_result.use_cases:
+                use_case_text = item.use_case.lower()
+
+                if any(word in use_case_text for word in ["create", "add", "insert", "register"]):
+                    categorized_use_cases["Create"].append(item.use_case)
+                elif any(word in use_case_text for word in ["get", "fetch", "retrieve", "list", "find", "view", "show", "display", "select"]):
+                    categorized_use_cases["Read"].append(item.use_case)
+                elif any(word in use_case_text for word in ["update", "modify", "change", "edit"]):
+                    categorized_use_cases["Update"].append(item.use_case)
+                elif any(word in use_case_text for word in ["delete", "remove", "erase"]):
+                    categorized_use_cases["Delete"].append(item.use_case)
+
+            return categorized_use_cases
+
         except Exception as e:
-            return [{
-                "use_case": "Error generating queries",
-                "query": f"-- Error: {str(e)}",
-                "affected_columns": [],
-                "user_input_columns": {}
-            }]
+            return {"error": f"Failed to generate use cases: {str(e)}"}
 
     def generate_query(self, use_case: str) -> Dict[str, Any]:
         """Generates an SQL query based on the provided use case."""
@@ -110,7 +119,7 @@ class FinanceQueryGenerator:
                 "query": query_result.query.replace("<", ":").replace(">", ""),
                 "user_input_columns": query_result.user_input_columns
             }
-        
+
         except Exception as e:
             return {
                 "query": f"-- Error: {str(e)}",

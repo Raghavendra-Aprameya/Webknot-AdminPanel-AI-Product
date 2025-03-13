@@ -14,7 +14,7 @@ DB_NAME = os.getenv("DB_NAME", "employee_db")
 DB_PORT = os.getenv("DB_PORT", "3306")
 DB_TYPE = os.getenv("DB_TYPE","mysql")
 
-GOOGLE_API_KEY = "AIzaSyDOcMkwhOQDGiq08BN-vj1vKwgV0CPhajI"
+GOOGLE_API_KEY = "AIzaSyCAvX8-4onZYj1oouOLZeKAnDQkdCn4tFs"
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-1.5-pro")
 
 CONNECTION_STRING = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
