@@ -1,4 +1,5 @@
 
+import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -71,6 +72,16 @@ def get_all_use_cases():
     
     return use_case_cache
 
+def extract_column_names(query):
+    insert_match = re.search(r'INSERT INTO\s+\w+\s*\(([^)]+)\)', query, re.IGNORECASE)
+    update_match = re.search(r'UPDATE\s+\w+\s+SET\s+([^WHERE]+)', query, re.IGNORECASE)
+    
+    if insert_match:
+        return [col.strip() for col in insert_match.group(1).split(',')]
+    elif update_match:
+        return [col.split('=')[0].strip() for col in update_match.group(1).split(',')]
+    return []
+
 @app.get("/api/v1/use_cases")
 def get_use_cases():
     """Retrieves a list of all available use cases."""
@@ -135,18 +146,39 @@ class UpdateRequest(BaseModel):
     query: str
     params: List[Any]
 
+
 @app.post("/api/v1/update_data")
 def update_data(request: UpdateRequest):
-    """Executes an update query based on the request data."""
     try:
-        affected_rows = execute_query(request.query, request.params)
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        column_names = extract_column_names(request.query)
+        cursor.execute(request.query, tuple(request.params) if request.params else ())
+
+        if request.query.strip().lower().startswith("select"):
+            results = cursor.fetchall()  # Fetch results as a list of dictionaries
+        else:
+            results = None
+            conn.commit()
+
+        cursor.close()
+        conn.close()
+
         return {
             "use_case": request.use_case,
-            "status": "updated",
-            "affected_rows": affected_rows
+            "query": request.query,
+            "user_input_columns": {col: val for col, val in zip(column_names, request.params)} if column_names else {},
+            "execution_result": {
+                "results": results if results else f"{cursor.rowcount} rows affected"
+            }
         }
+
+    except mysql.connector.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Query execution failed: {str(e)}")
+
 
 
 class UseCaseRequest(BaseModel):
