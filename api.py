@@ -148,15 +148,15 @@ def update_data(request: UpdateRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-class UseCaseExecutionRequest(BaseModel):
-    use_case: str
-    user_inputs: Dict[str, Any]  # Example: {"salary": 50000, "employee_id": 123}
+
+class UseCaseRequest(BaseModel):
+    use_case: str  # Only use_case is required in the request body
 
 @app.post("/api/v1/execute_use_case")
-def execute_use_case(request: UseCaseExecutionRequest):
-    """Generates and executes an SQL query based on the provided use case and user inputs."""
+def execute_use_case(request: UseCaseRequest):
+    """Generates an SQL query based on the provided use case and returns it without execution."""
     try:
-        # Extract schema
+        # Extract schema from the database
         schema_extractor = DatabaseSchemaExtractor(CONNECTION_STRING)
         schema = schema_extractor.get_schema()
 
@@ -172,15 +172,13 @@ def execute_use_case(request: UseCaseExecutionRequest):
         if not generated_query["query"] or "Error" in generated_query["query"]:
             raise HTTPException(status_code=400, detail="Failed to generate query.")
 
-        # Execute the generated query
-        db_executor = DatabaseQueryExecutor(CONNECTION_STRING)
-        execution_result = db_executor.execute_query(generated_query["query"], request.user_inputs)
+        # Convert user_input_columns dict keys to a list
+        user_input_columns = list(generated_query["user_input_columns"].keys())
 
         return {
             "use_case": request.use_case,
             "query": generated_query["query"],
-            "user_input_columns": generated_query["user_input_columns"],
-            "execution_result": execution_result
+            "user_input_columns": user_input_columns
         }
 
     except Exception as e:
