@@ -1,29 +1,44 @@
-import re
+
 import os
+import re
+from urllib.parse import quote_plus
 import mysql.connector
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from typing import Dict, Any, List, Optional
-from config import CONNECTION_STRING, GOOGLE_API_KEY, LLM_MODEL, DB_TYPE
+from typing import List, Any
 from db_extract import DatabaseSchemaExtractor
 from query_generator import FinanceQueryGenerator
 
-load_dotenv()
+# Global variables for database connection
+global DB_TYPE, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, JDBC_URL, use_case_cache
 
-# Load database credentials from .env file
-DB_HOST = os.getenv("DB_HOST")
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_NAME = os.getenv("DB_NAME")
+DB_TYPE = "mysql"
+DB_HOST = "127.0.0.1"
+DB_PORT = "3306"
+DB_NAME = "employee_db"
+DB_USER = "root"
+DB_PASSWORD = "password"
+JDBC_URL = f"{DB_TYPE}+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+use_case_cache = None
+
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyCAvX8-4onZYj1oouOLZeKAnDQkdCn4tFs")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-1.5-pro")
 
 app = FastAPI()
 
-# Cache for storing generated use cases
-use_case_cache = None
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Update with specific origins if necessary
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_db_connection():
-    """Establishes a connection to the MySQL database."""
+    """Establish a database connection using updated environment variables."""
     try:
         return mysql.connector.connect(
             host=DB_HOST,
@@ -35,80 +50,57 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
 def get_all_use_cases():
-    """Fetches and caches all use cases from the database schema."""
-    global use_case_cache
-    
+    """Fetches and caches all use cases using updated database connection details."""
+    global use_case_cache, JDBC_URL, DB_TYPE  # Ensure global variables are used
+
     if use_case_cache is None:
         try:
-            schema_extractor = DatabaseSchemaExtractor(CONNECTION_STRING)
+            schema_extractor = DatabaseSchemaExtractor(JDBC_URL)
             schema = schema_extractor.get_schema()
-            
+
             query_generator = FinanceQueryGenerator(
                 schema=schema,
                 api_key=GOOGLE_API_KEY,
                 db_type=DB_TYPE,
                 model=LLM_MODEL
             )
-            
+
             use_case_cache = query_generator.generate_use_cases()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to generate use cases: {str(e)}")
-    
-    return use_case_cache  # Categorized dictionary
+
+    return use_case_cache
 
 @app.get("/api/v1/use_cases")
 def get_use_cases():
-    """Retrieves categorized use cases (Create, Read, Update, Delete)."""
+    """Retrieve categorized use cases."""
     try:
         return get_all_use_cases()
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
-# @app.get("/api/v1/use_case/{use_case}")
-# def get_use_case_details(use_case: str):
-#     """Retrieves details for a specific use case."""
-#     try:
-#         all_use_cases = get_all_use_cases()
-        
-#         if not isinstance(all_use_cases, dict):
-#             raise HTTPException(status_code=500, detail="Use case data is not in the expected format.")
-
-#         for category, use_cases in all_use_cases.items():
-#             if isinstance(use_cases, list):
-#                 for case in use_cases:
-#                     if isinstance(case, dict) and case.get("use_case", "").strip().lower() == use_case.strip().lower():
-#                         return {
-#                             "use_case": case["use_case"],
-#                             "query": case["query"],
-#                             "user_input_columns": case.get("user_input_columns", {})
-#                         }
-        
-#         raise HTTPException(status_code=404, detail=f"Use case '{use_case}' not found")
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Failed to retrieve use case details: {str(e)}")
 
 class UseCaseRequest(BaseModel):
     use_case: str
 
 @app.post("/api/v1/execute_use_case")
 def execute_use_case(request: UseCaseRequest):
-    """Generates an SQL query for a given use case without executing it."""
+    """Generates an SQL query for a given use case."""
     try:
-        schema_extractor = DatabaseSchemaExtractor(CONNECTION_STRING)
+        schema_extractor = DatabaseSchemaExtractor(JDBC_URL)
         schema = schema_extractor.get_schema()
-        
+
         query_generator = FinanceQueryGenerator(
             schema=schema,
             api_key=GOOGLE_API_KEY,
             db_type=DB_TYPE,
             model=LLM_MODEL
         )
-        
+
         generated_query = query_generator.generate_query(request.use_case)
-        
+
         if not generated_query["query"] or "Error" in generated_query["query"]:
             raise HTTPException(status_code=400, detail="Failed to generate query.")
-        
+
         return {
             "use_case": request.use_case,
             "query": generated_query["query"],
@@ -116,7 +108,7 @@ def execute_use_case(request: UseCaseRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 class UpdateRequest(BaseModel):
     use_case: str
     query: str
@@ -124,34 +116,29 @@ class UpdateRequest(BaseModel):
 
 @app.post("/api/v1/update_data")
 def update_data(request: UpdateRequest):
+    """Executes an SQL query to update data."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # 1. Replace :param_name with %s
+        # Replace named parameters
         modified_query = replace_named_params(request.query)
-
-        # 2. Extract column names (for logging/debugging purposes)
         column_names = extract_column_names(modified_query)
 
-        # 3. Execute the query
         cursor.execute(modified_query, tuple(request.params) if request.params else ())
 
-        # 4. Handle SELECT results vs. DML operations
         if modified_query.strip().lower().startswith("select"):
-            results = cursor.fetchall()  # Fetch results as list of dicts
+            results = cursor.fetchall()
         else:
             results = None
             conn.commit()
 
-        # 5. Clean up
         cursor.close()
         conn.close()
 
-        # 6. Return response
         return {
             "use_case": request.use_case,
-            "query":modified_query,
+            "query": modified_query,
             "user_input_columns": {col: val for col, val in zip(column_names, request.params)} if column_names else {},
             "execution_result": results if results else f"{cursor.rowcount} rows affected"
         }
@@ -160,19 +147,68 @@ def update_data(request: UpdateRequest):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query execution failed: {str(e)}")
+
 def replace_named_params(query):
-    """
-    Replace all :param_name occurrences with %s.
-    """
-    # This regex looks for : followed by word characters and replaces with %s
+    """Replace named parameters (e.g., :param_name) with %s."""
     return re.sub(r":\w+", "%s", query)
 
 def extract_column_names(query):
+    """Extract column names from INSERT and UPDATE queries."""
     insert_match = re.search(r'INSERT INTO\s+\w+\s*\(([^)]+)\)', query, re.IGNORECASE)
     update_match = re.search(r'UPDATE\s+\w+\s+SET\s+([^WHERE]+)', query, re.IGNORECASE)
-    
+
     if insert_match:
         return [col.strip() for col in insert_match.group(1).split(',')]
     elif update_match:
         return [col.split('=')[0].strip() for col in update_match.group(1).split(',')]
     return []
+
+class DbDetails(BaseModel):
+    DB_TYPE: str
+    DB_HOST: str
+    DB_PORT: str
+    DB_NAME: str
+    DB_USER: str
+    DB_PASSWORD: str
+    JDBC_URL: str
+
+# API: Update Database Connection Details
+@app.post("/api/v1/dbDetails")
+def receive_db_details(details: DbDetails):
+    """Update database connection details dynamically and reset cache."""
+    try:
+        global DB_TYPE, DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, JDBC_URL, use_case_cache
+
+        # Extract details
+        DB_TYPE = details.DB_TYPE
+        DB_HOST = details.DB_HOST
+        DB_PORT = details.DB_PORT
+        DB_NAME = details.DB_NAME
+        DB_USER = details.DB_USER
+        DB_PASSWORD = details.DB_PASSWORD
+
+        # Fix: Remove "jdbc:" if present
+        jdbc_url = details.JDBC_URL.replace("jdbc:", "")
+        
+        # Add pymysql to MySQL connections
+        if DB_TYPE.lower() == "mysql" and "+pymysql" not in jdbc_url:
+            JDBC_URL = f"mysql+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        else:
+            JDBC_URL = jdbc_url
+
+        print(f"Updated JDBC_URL: {JDBC_URL}")  # Debugging
+
+        # Reset use case cache
+        use_case_cache = None  
+
+        return {
+            "status": "success",
+            "message": "Database details updated",
+            "JDBC_URL": JDBC_URL    
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to update database details: {str(e)}",
+        }
